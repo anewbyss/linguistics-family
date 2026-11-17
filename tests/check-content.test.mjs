@@ -35,3 +35,9 @@ test('a quiz answer without an explanation fails', () => {
   assert.equal(problems.length, 1);
   assert.match(problems[0], /needs an explanation/);
 });
+
+test('a quiz answer pointing outside the options fails', () => {
+  const problems = checkDoc(load('bad-answer.json'));
+  assert.equal(problems.length, 1);
+  assert.match(problems[0], /valid option index/);
+});

@@ -1,0 +1,11 @@
+{
+  "lang": "test",
+  "lessons": [
+    {
+      "id": "t-1", "title": "Test lesson", "band": "kids",
+      "quiz": [ { "q": "pick", "options": ["a", "b"], "answer": 5,
+        "explain": "Because.",
+        "src": { "url": "https://example.com/source", "name": "Example" } } ]
+    }
+  ]
+}

@@ -56,6 +56,7 @@ function checkEntry(entry, where) {
     entry.quiz.forEach((q, i) => {
       checkSrc(`${label}#quiz${i}`, q.src, 'quiz');
       if (!Array.isArray(q.options) || q.options.length < 2) bad(`${label}#quiz${i}`, 'quiz needs >= 2 options');
+      if (!Number.isInteger(q.answer) || q.answer < 0 || q.answer >= (q.options?.length ?? 0)) bad(`${label}#quiz${i}`, 'quiz answer must be a valid option index');
       if (typeof q.explain !== 'string' || !q.explain.trim()) bad(`${label}#quiz${i}`, 'quiz answer needs an explanation');
     });
   }
