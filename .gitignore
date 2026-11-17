@@ -1,0 +1,10 @@
+node_modules/
+out/
+.env
+*.env
+.env.*
+!*.example
+*.local
+.raea/
+.DS_Store
+Thumbs.db

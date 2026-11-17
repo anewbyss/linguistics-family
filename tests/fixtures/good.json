@@ -1,0 +1,16 @@
+{
+  "lang": "test",
+  "lessons": [
+    {
+      "id": "t-1", "title": "Test lesson", "band": "kids",
+      "vocab": [
+        { "t": "word", "en": "a word", "src": { "url": "https://example.com/source", "name": "Example source" } }
+      ],
+      "quiz": [
+        { "q": "pick the word", "options": ["word", "other"], "answer": 0,
+          "explain": "Because the source says so.",
+          "src": { "url": "https://example.com/source", "name": "Example source" } }
+      ]
+    }
+  ]
+}

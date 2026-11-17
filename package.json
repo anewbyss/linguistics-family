@@ -1,0 +1,14 @@
+{
+  "name": "linguistics-family",
+  "version": "0.1.0",
+  "private": false,
+  "description": "Family language app: lea faka-Tonga + Bodewadmimwen (Potawatomi). Multi-age, source-attributed, built with raea.",
+  "type": "module",
+  "scripts": {
+    "check": "node scripts/check-content.mjs",
+    "test": "node --test tests/",
+    "app": "raea app run app/app.tsx",
+    "app:check": "raea app check app/app.tsx --png out/"
+  },
+  "engines": { "node": ">=22" }
+}

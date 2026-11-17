@@ -1,0 +1,9 @@
+{
+  "lang": "test",
+  "lessons": [
+    {
+      "id": "t-1", "title": "Test lesson", "band": "kids",
+      "vocab": [ { "t": "word", "en": "a word" } ]
+    }
+  ]
+}
