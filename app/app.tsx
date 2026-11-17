@@ -1,30 +1,44 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { DATA, TRACKS, type LangDoc, type Lesson, type Vocab } from "./data.gen";
+import { schedule, dueItems, describeLevel, DAY } from "./srs.mjs";
 
 export const app = { target: "web", title: "Family Languages", size: [1100, 720], minSize: [820, 560] };
 
-// The check walks the real task: pick a language, pick a track, open a lesson,
-// answer a quiz item right, one wrong, finish, and visit the credits.
+// The check walks the real task: mark two words learned (they schedule for
+// tomorrow), confirm the review queue is honestly "all caught up", then add a
+// second child's profile and confirm it starts clean.
 export const steps = [
   { press: "lang-tongan" },
-  { press: "track-kids" },
   { press: "lesson-card-to-greet-1" },
-  { press: "quiz-opt-1" },          // right answer -> explanation shows
-  { press: "next-question" },
-  { press: "quiz-opt-0" },          // wrong answer -> explanation still shows
-  { press: "next-question" },       // quiz summary
-  { press: "practice-again" },
-  { press: "quiz-opt-0" },
+  { press: "learn-0" },
+  { press: "learn-1" },
   { press: "back" },
-  { press: "top-home" },
-  { press: "top-credits" },
+  { press: "review-open" },
+  { press: "review-back" },
+  { press: "profile-open" },
+  { type: "Kid Two", into: "profile-name" },
+  { press: "profile-add" },
+  { press: "profile-pick-1" },
+  { press: "lesson-card-to-greet-1" },
 ];
 
-const BAND_LABEL: Record<string, string> = { kids: "Start together", youth: "Keep going", adult: "Go deeper" };
-const BAND_ORDER = ["kids", "youth", "adult"];
+type Learned = { t: string; en: string; state: { level: number; due: number } };
+type Profile = { name: string; band: string; learned: Record<string, Learned> };
+
+const freshProfile = (name: string, band = "kids"): Profile => ({ name, band, learned: {} });
+
+const STORAGE_KEY = "family-languages-profiles";
+async function persist(profiles: Profile[]) {
+  try {
+    // @ts-expect-error host wire provided by raea at runtime
+    const w = await import("@raea/ui/wire");
+    await w.call("net.storage.set", { key: STORAGE_KEY, value: JSON.stringify(profiles) });
+  } catch {
+    /* headless check or storage unavailable — in-memory is fine */
+  }
+}
 
 function openExternal(url: string) {
-  // host call for the raea app; safe no-op fallback keeps checks headless-friendly
   try {
     // @ts-expect-error host wire provided by raea at runtime
     import("@raea/ui/wire").then((w: any) => w.call("os.open", { url }));
@@ -32,6 +46,9 @@ function openExternal(url: string) {
     /* headless check: nothing to open */
   }
 }
+
+const BAND_LABEL: Record<string, string> = { kids: "Start together", youth: "Keep going", adult: "Go deeper" };
+const BAND_ORDER = ["kids", "youth", "adult"];
 
 function TopBar({ title, onHome, onCredits, back }: { title: string; onHome: () => void; onCredits: () => void; back?: () => void }) {
   return (
@@ -48,18 +65,64 @@ function TopBar({ title, onHome, onCredits, back }: { title: string; onHome: () 
   );
 }
 
-function VocabCard({ v, i, big }: { v: Vocab; i: number; big: boolean }) {
+function ProfileBar({ profiles, active, onSwitch, onAdd, onOpen, open }: {
+  profiles: Profile[]; active: number; onSwitch: (i: number) => void; onAdd: (name: string) => void; onOpen: () => void; open: boolean;
+}) {
+  const [name, setName] = useState("");
+  return (
+    <div data-testid="profile-bar" className="flex flex-row flex-wrap items-center gap-2 border-b border-zinc-200 bg-white px-5 py-2 dark:border-zinc-800 dark:bg-zinc-950">
+      <span className="text-xs text-zinc-500">Learning as</span>
+      <button data-testid="profile-open" onClick={onOpen} className="rounded-md border border-zinc-300 px-2 py-1 text-xs font-medium text-zinc-800 hover:border-emerald-500 dark:border-zinc-600 dark:text-zinc-100">
+        {profiles[active]?.name ?? "?"} ({profiles[active]?.band ?? ""})
+      </button>
+      {open && (
+        <div data-testid="profile-panel" className="flex flex-row flex-wrap items-center gap-2">
+          <input
+            data-testid="profile-name"
+            aria-label="New profile name"
+            value={name}
+            onChange={(e) => setName((e.target as HTMLInputElement).value)}
+            placeholder="Add someone…"
+            className="h-8 w-40 rounded-md border border-zinc-300 bg-white px-2 text-xs dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-50"
+          />
+          <button
+            data-testid="profile-add"
+            onClick={() => { if (name.trim()) { onAdd(name.trim()); setName(""); } }}
+            className="rounded-md bg-emerald-600 px-2 py-1 text-xs text-white hover:bg-emerald-700"
+          >
+            Add profile
+          </button>
+          {profiles.map((p, i) => (
+            <button
+              key={i}
+              data-testid={`profile-pick-${i}`}
+              onClick={() => { onSwitch(i); onOpen(); }}
+              className={"rounded-md px-2 py-1 text-xs " + (i === active ? "bg-emerald-50 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-200" : "text-zinc-600 hover:bg-zinc-100 dark:text-zinc-300")}
+            >
+              {p.name}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function VocabCard({ v, i, big, learnedState, onLearn }: { v: Vocab; i: number; big: boolean; learnedState?: Learned; onLearn: () => void }) {
   return (
     <div data-testid={`vocab-${i}`} className="flex flex-col gap-1 rounded-xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
       <span className={(big ? "text-2xl " : "text-lg ") + "font-semibold text-zinc-900 dark:text-zinc-50"}>{v.t}</span>
       <span className="text-sm text-zinc-600 dark:text-zinc-300">{v.en}</span>
       {v.note && <span className="text-xs italic text-zinc-500">say it: {v.note}</span>}
-      <div className="mt-1 flex flex-row items-center gap-3 text-xs">
+      <div className="mt-1 flex flex-row flex-wrap items-center gap-3 text-xs">
         {v.audio && (
           <button data-testid={`audio-${i}`} onClick={() => openExternal(v.audio!)} className="rounded-md bg-emerald-600 px-2 py-1 text-white hover:bg-emerald-700">
             ▶ Hear it
           </button>
         )}
+        <button data-testid={`learn-${i}`} onClick={onLearn} className="rounded-md border border-emerald-500 px-2 py-1 text-emerald-800 hover:bg-emerald-50 dark:text-emerald-300 dark:hover:bg-emerald-950">
+          {learnedState ? `✓ reviews ${describeLevel(learnedState.state.level)}` : "✓ I know this"}
+        </button>
         <button data-testid={`src-${i}`} onClick={() => v.src.url && openExternal(v.src.url)} className="text-emerald-700 underline decoration-dotted dark:text-emerald-400">
           source: {v.src.name}
         </button>
@@ -68,7 +131,71 @@ function VocabCard({ v, i, big }: { v: Vocab; i: number; big: boolean }) {
   );
 }
 
-function LessonScreen({ lang, lesson, band, onBack }: { lang: LangDoc; lesson: Lesson; band: string; onBack: () => void }) {
+function ReviewScreen({ lang, profile, onSchedule, onBack }: {
+  lang: LangDoc; profile: Profile; onSchedule: (key: string, t: string, en: string, correct: boolean) => void; onBack: () => void;
+}) {
+  const now = Date.now();
+  const queue: { key: string; t: string; en: string }[] = [];
+  for (const l of lang.lessons) {
+    l.vocab.forEach((v, i) => {
+      const key = `${l.id}:${i}`;
+      if (profile.learned[key]) queue.push({ key, t: profile.learned[key].t, en: profile.learned[key].en });
+    });
+  }
+  const due = dueItems(queue.map((q) => ({ ...q, state: profile.learned[q.key]?.state })), now);
+  const [pos, setPos] = useState(0);
+  const [revealed, setRevealed] = useState(false);
+  const [done, setDone] = useState(0);
+  const item = due[pos];
+
+  const judge = (correct: boolean) => {
+    onSchedule(item.key, item.t, item.en, correct);
+    setRevealed(false);
+    if (correct) setDone((d) => d + 1);
+    setPos((p) => p + 1);
+  };
+
+  if (!item) {
+    const future = queue.map((q) => profile.learned[q.key]?.state?.due ?? Infinity);
+    const nextDue = Math.min(...future);
+    return (
+      <div data-testid="review" className="flex flex-1 flex-col items-center justify-center gap-4 bg-zinc-50 p-8 dark:bg-zinc-950">
+        <div data-testid="review-done" className="max-w-md rounded-2xl border border-emerald-200 bg-emerald-50 p-6 text-center dark:border-emerald-900 dark:bg-emerald-950">
+          <p className="text-lg font-semibold text-emerald-900 dark:text-emerald-200">All caught up — {done} reviewed.</p>
+          <p className="mt-2 text-sm text-emerald-800 dark:text-emerald-300">
+            {Number.isFinite(nextDue)
+              ? `The next words come back ${Math.round((nextDue - now) / DAY) <= 1 ? "tomorrow" : `in about ${Math.round((nextDue - now) / DAY)} days`}. Mark new words with ✓ I know this and they join the queue.`
+              : "Mark words with ✓ I know this in a lesson and they'll come back here for review."}
+          </p>
+          <button data-testid="review-back" onClick={onBack} className="mt-3 rounded-md border border-zinc-300 px-3 py-1 text-sm text-zinc-700 dark:border-zinc-600 dark:text-zinc-200">← Back</button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div data-testid="review" className="flex flex-1 flex-col items-center justify-center gap-5 bg-zinc-50 p-8 dark:bg-zinc-950">
+      <p className="text-xs text-zinc-500">{due.length - pos} to review</p>
+      <p data-testid="review-word" className="text-3xl font-semibold text-zinc-900 dark:text-zinc-50">{item.t}</p>
+      {!revealed ? (
+        <button data-testid="review-reveal" onClick={() => setRevealed(true)} className="rounded-lg bg-emerald-600 px-5 py-2 text-sm text-white hover:bg-emerald-700">Show meaning</button>
+      ) : (
+        <div data-testid="review-answer" className="flex flex-col items-center gap-3">
+          <p className="text-xl text-zinc-800 dark:text-zinc-100">{item.en}</p>
+          <div className="flex flex-row gap-3">
+            <button data-testid="review-known" onClick={() => judge(true)} className="rounded-lg bg-emerald-600 px-4 py-2 text-sm text-white hover:bg-emerald-700">I knew it</button>
+            <button data-testid="review-again" onClick={() => judge(false)} className="rounded-lg border border-zinc-300 px-4 py-2 text-sm text-zinc-700 dark:border-zinc-600 dark:text-zinc-200">Still learning</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function LessonScreen({ lang, lesson, band, learned, onLearn, onBack }: {
+  lang: LangDoc; lesson: Lesson; band: string;
+  learned: (key: string) => Learned | undefined; onLearn: (key: string, v: Vocab) => void; onBack: () => void;
+}) {
   const [qi, setQi] = useState(0);
   const [picked, setPicked] = useState<number | null>(null);
   const [right, setRight] = useState(0);
@@ -93,7 +220,10 @@ function LessonScreen({ lang, lesson, band, onBack }: { lang: LangDoc; lesson: L
           <h1 className="text-xl font-semibold text-zinc-900 dark:text-zinc-50">{lesson.emoji ? lesson.emoji + " " : ""}{lesson.title}</h1>
           {lesson.nativeTitle && <span className="text-sm italic text-zinc-500">{lesson.nativeTitle}</span>}
         </div>
-        {lesson.vocab.map((v, i) => <VocabCard key={i} v={v} i={i} big={isKid} />)}
+        {lesson.vocab.map((v, i) => {
+          const key = `${lesson.id}:${i}`;
+          return <VocabCard key={key} v={v} i={i} big={isKid} learnedState={learned(key)} onLearn={() => onLearn(key, v)} />;
+        })}
         {!isKid && lesson.grammarNotes && lesson.grammarNotes.length > 0 && (
           <div data-testid="grammar" className="rounded-xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
             <h2 className="text-sm font-semibold text-zinc-800 dark:text-zinc-200">How it works (from the sources)</h2>
@@ -104,7 +234,7 @@ function LessonScreen({ lang, lesson, band, onBack }: { lang: LangDoc; lesson: L
         )}
         {isKid && (
           <p data-testid="kids-note" className="text-xs text-zinc-500">
-            Grown-ups: tap any "source" link to read or hear where the word comes from.
+            Grown-ups: tap "✓ I know this" as your kid picks words up — they come back for review. Source links show where every word comes from.
           </p>
         )}
         {lesson.culture && lesson.culture.length > 0 && (
@@ -212,12 +342,67 @@ function CreditsScreen({ onBack }: { onBack: () => void }) {
 }
 
 export default function FamilyLanguages() {
-  const [screen, setScreen] = useState<"home" | "lang" | "lesson" | "credits">("home");
+  const [screen, setScreen] = useState<"home" | "lang" | "lesson" | "review" | "credits">("home");
   const [langIdx, setLangIdx] = useState(0);
-  const [band, setBand] = useState<string>("kids");
   const [lessonIdx, setLessonIdx] = useState(0);
+  const [profiles, setProfiles] = useState<Profile[]>([freshProfile("First learner")]);
+  const [active, setActive] = useState(0);
+  const [profileOpen, setProfileOpen] = useState(false);
+
+  // restore saved profiles when the host provides storage
+  useEffect(() => {
+    (async () => {
+      try {
+        // @ts-expect-error host wire provided by raea at runtime
+        const w = await import("@raea/ui/wire");
+        const r = await w.call("net.storage.get", { key: STORAGE_KEY });
+        const saved = typeof r?.value === "string" ? JSON.parse(r.value) : r?.value;
+        if (Array.isArray(saved) && saved.length && saved[0]?.name && saved[0]?.learned) {
+          setProfiles(saved);
+          setActive(0);
+        }
+      } catch {
+        /* no storage — keep defaults */
+      }
+    })();
+  }, []);
+
+  const updateActive = (fn: (p: Profile) => Profile) => {
+    setProfiles((ps) => {
+      const next = ps.map((p, i) => (i === active ? fn(p) : p));
+      persist(next);
+      return next;
+    });
+  };
+
+  const markLearned = (key: string, v: Vocab) => {
+    updateActive((p) => {
+      const learned = { ...p.learned };
+      if (learned[key]) delete learned[key];
+      else learned[key] = { t: v.t, en: v.en, state: schedule(learned[key]?.state, Date.now(), true) };
+      return { ...p, learned };
+    });
+  };
+  const judgeReview = (key: string, t: string, en: string, correct: boolean) => {
+    updateActive((p) => {
+      const cur = p.learned[key];
+      return { ...p, learned: { ...p.learned, [key]: { t, en, state: schedule(cur?.state, Date.now(), correct) } } };
+    });
+  };
+
   const lang = DATA[langIdx];
   const lessons = lang?.lessons ?? [];
+  const profile = profiles[active];
+  const dueCount = (() => {
+    const now = Date.now();
+    let due = 0, learned = 0;
+    for (const l of lessons) l.vocab.forEach((_, i) => {
+      const st = profile?.learned[`${l.id}:${i}`]?.state;
+      if (st) { learned++; if (st.due <= now) due++; }
+    });
+    return { due, learned };
+  })();
+  const learnedCount = dueCount.learned;
 
   if (screen === "credits") {
     return (
@@ -226,11 +411,26 @@ export default function FamilyLanguages() {
       </div>
     );
   }
+  if (screen === "review") {
+    return (
+      <div data-testid="page" className="flex h-screen flex-col bg-zinc-50 dark:bg-zinc-950">
+        <TopBar title={`Review — ${profile?.name ?? ""}`} onHome={() => setScreen("home")} onCredits={() => setScreen("credits")} back={() => setScreen("lang")} />
+        <ReviewScreen lang={lang} profile={profile} onSchedule={judgeReview} onBack={() => setScreen("lang")} />
+      </div>
+    );
+  }
   if (screen === "lesson" && lessons[lessonIdx]) {
     return (
       <div data-testid="page" className="flex h-screen flex-col bg-zinc-50 dark:bg-zinc-950">
         <TopBar title={lang.title} onHome={() => setScreen("home")} onCredits={() => setScreen("credits")} back={() => setScreen("lang")} />
-        <LessonScreen lang={lang} lesson={lessons[lessonIdx]} band={band} onBack={() => setScreen("lang")} />
+        <LessonScreen
+          lang={lang}
+          lesson={lessons[lessonIdx]}
+          band={profile?.band ?? "kids"}
+          learned={(key) => profile?.learned[key]}
+          onLearn={markLearned}
+          onBack={() => setScreen("lang")}
+        />
       </div>
     );
   }
@@ -238,6 +438,7 @@ export default function FamilyLanguages() {
     return (
       <div data-testid="page" className="flex h-screen flex-col bg-zinc-50 dark:bg-zinc-950">
         <TopBar title={lang.title} onHome={() => setScreen("home")} onCredits={() => setScreen("credits")} />
+        <ProfileBar profiles={profiles} active={active} open={profileOpen} onOpen={() => setProfileOpen((o) => !o)} onSwitch={setActive} onAdd={(name) => setProfiles((ps) => [...ps, freshProfile(name, profiles[active]?.band ?? "kids")])} />
         <div className="flex flex-1 flex-row gap-5 overflow-y-auto p-5">
           <div className="flex w-64 flex-col gap-3">
             <h2 data-testid="track-title" className="text-sm font-semibold text-zinc-800 dark:text-zinc-200">Who's learning?</h2>
@@ -245,10 +446,10 @@ export default function FamilyLanguages() {
               <button
                 key={t.id}
                 data-testid={`track-${t.id}`}
-                onClick={() => setBand(t.id)}
+                onClick={() => updateActive((p) => ({ ...p, band: t.id }))}
                 className={
                   "rounded-xl border p-3 text-left " +
-                  (band === t.id
+                  (profile?.band === t.id
                     ? "border-emerald-600 bg-emerald-50 dark:border-emerald-500 dark:bg-emerald-950"
                     : "border-zinc-200 bg-white hover:border-emerald-400 dark:border-zinc-800 dark:bg-zinc-900")
                 }
@@ -257,6 +458,18 @@ export default function FamilyLanguages() {
                 <span className="block text-xs text-zinc-500">{t.blurb}</span>
               </button>
             ))}
+            <button
+              data-testid="review-open"
+              onClick={() => setScreen("review")}
+              className="mt-2 rounded-xl border border-emerald-600 bg-emerald-50 p-3 text-left dark:border-emerald-500 dark:bg-emerald-950"
+            >
+              <span className="block text-sm font-medium text-emerald-900 dark:text-emerald-200">Review</span>
+              <span className="block text-xs text-emerald-700 dark:text-emerald-400">
+                {learnedCount === 0
+                  ? "Mark words with ✓ I know this, and they come back here"
+                  : `${dueCount} of ${learnedCount} learned word${learnedCount === 1 ? "" : "s"} due now`}
+              </span>
+            </button>
           </div>
           <div className="flex flex-1 flex-col gap-4">
             <p className="text-xs text-zinc-500">{lang.orthography}</p>
@@ -296,6 +509,7 @@ export default function FamilyLanguages() {
   return (
     <div data-testid="page" className="flex h-screen flex-col bg-zinc-50 dark:bg-zinc-950">
       <TopBar title="Family Languages" onHome={() => setScreen("home")} onCredits={() => setScreen("credits")} />
+      <ProfileBar profiles={profiles} active={active} open={profileOpen} onOpen={() => setProfileOpen((o) => !o)} onSwitch={setActive} onAdd={(name) => setProfiles((ps) => [...ps, freshProfile(name, profiles[active]?.band ?? "kids")])} />
       <div className="flex flex-1 flex-col items-center justify-center gap-6 p-8">
         <p className="max-w-xl text-center text-sm text-zinc-600 dark:text-zinc-300">
           One family, two languages. Every word here comes from the community's own teachers, with its source one tap away.
